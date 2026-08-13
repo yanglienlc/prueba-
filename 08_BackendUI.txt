@@ -23,3 +23,28 @@ function guardarConfiguracion(datos) {
   }
   return true;
 }
+
+function obtenerDatosTermometro() {
+  const props = PropertiesService.getDocumentProperties();
+  const urlPublica = getConfig("URL_LOGO_PUBLICO");
+  
+  // ESTRATEGIA BIFURCADA: Prioridad Base64 para Modales (Evita el bloqueo de Google)
+  let logoSeguro = urlPublica;
+  
+  if (typeof IMG_BASE64_NOTIFICACION !== 'undefined' && IMG_BASE64_NOTIFICACION !== '') {
+    logoSeguro = IMG_BASE64_NOTIFICACION;
+    // Si la cadena no trae el prefijo necesario para HTML, se lo agregamos
+    if (!logoSeguro.startsWith('http') && !logoSeguro.startsWith('data:')) {
+      logoSeguro = 'data:image/png;base64,' + logoSeguro;
+    }
+  }
+
+  return {
+    habana: props.getProperty('TERMOMETRO_HABANA') || "Aún no hay datos registrados",
+    miami: props.getProperty('TERMOMETRO_MIAMI') || "Aún no hay datos registrados",
+    oro: getConfig("COLOR_ORO"),
+    fondo: getConfig("COLOR_FONDO"),
+    texto: getConfig("COLOR_TEXTO"),
+    logo: logoSeguro
+  };
+}
