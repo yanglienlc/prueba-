@@ -5,6 +5,7 @@
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('🚀 Expedientes LMD')
     .addItem('⚙️ Panel de Control', 'abrirPanelControl')
+    .addItem('📊 Termómetro Consular', 'abrirTermometro')
     .addSeparator()
     .addItem('1. Verificar Vencimientos (Manual)', 'ejecutarAuditorManual')
     .addItem('2. Enviar Correos Pendientes', 'ejecutarEnviosManual')
@@ -18,19 +19,25 @@ function abrirPanelControl() {
   SpreadsheetApp.getUi().showModalDialog(html, '⚙️ Panel de Configuración');
 }
 
-// Puentes para capturar el resultado y mostrar la ventana emergente en lugar de la alerta gris
+function abrirTermometro() {
+  const html = HtmlService.createTemplateFromFile('Modal_Termometro').evaluate()
+    .setWidth(450)
+    .setHeight(500);
+  SpreadsheetApp.getUi().showModalDialog(html, '📊 Inteligencia de Negocio');
+}
+
+// Puentes para capturar el resultado y mostrar la ventana emergente
 function ejecutarAuditorManual() {
-  const resultado = trabajadorNocturno(); // Devolverá un objeto
+  const resultado = trabajadorNocturno(); 
   mostrarReporte("Verificación de Vencimientos", resultado);
 }
 
 function ejecutarEnviosManual() {
-  const resultado = procesarNotificacionesLMD(); // Devolverá un objeto
+  const resultado = procesarNotificacionesLMD(); 
   mostrarReporte("Envío de Notificaciones", resultado);
 }
 
 function mostrarReporte(titulo, resultado) {
-  // Evitar error si se canceló por estar vacío
   if (!resultado || resultado.cancelado) return; 
   
   const plantilla = HtmlService.createTemplateFromFile('Modal_Reporte');
