@@ -2,7 +2,7 @@
 // MÓDULO 06: PLANTILLAS Y DISEÑO
 // ==========================================
 
-function obtenerPlantillaHTML(nombre, estado, enlaceBaja) {
+function obtenerPlantillaHTML(nombre, estado, enlaceBaja, contexto = {}) {
   // Leemos colores en tiempo real
   const fondo = getConfig("COLOR_FONDO");
   const oro = getConfig("COLOR_ORO");
@@ -23,12 +23,34 @@ function obtenerPlantillaHTML(nombre, estado, enlaceBaja) {
       cuerpoMensaje = `<p>Hola <strong>${nombre}</strong>, ¿cómo va todo?</p><p>Te enviamos esta comunicación para mantenerte al tanto del estado de tu solicitud bajo la Ley de Memoria Democrática. Tu expediente se encuentra debidamente presentado y sigue su curso legal de calificación ante las autoridades correspondientes.</p><p>Queremos que tengas la certeza de que tu trámite está supervisado y en nuestras manos. Dado que estos procesos tienen tiempos de resolución largos por el volumen de expedientes, continuamos revisando tu caso de forma periódica. Nos pondremos en contacto contigo de inmediato en cuanto recibamos alguna resolución oficial o requerimiento.</p>`;
       break;
     case "PENDIENTE DE CITA":
-      asunto = "Estado de tu trámite LMD - Gestión de cita";
-      cuerpoMensaje = `<p>¡Hola <strong>${nombre}</strong>!</p><p>Te escribimos para confirmarte que tu expediente está completamente listo y validado por nuestro equipo.</p><p>Actualmente nos encontramos a la espera de que se habilite disponibilidad en la sede correspondiente para poder agendar tu cita, o bien, aguardando que nos confirmes tus fechas de preferencia. La apertura de agendas por parte de la administración suele ser intermitente, pero estamos monitoreando activamente la situación para asegurar tu presentación.</p><p>Tu gestión está segura con nosotros; te avisaremos enseguida al tener la confirmación.</p>`;
+      // Lógica Dinámica: Verificamos si la celda empieza con la palabra mágica
+      if (contexto.detalle && contexto.detalle.toUpperCase().startsWith("CITA PROGRAMADA")) {
+        // Extraemos solo la fecha quitando la palabra clave
+        let fechaCitaTexto = contexto.detalle.substring(15).trim();
+        asunto = "Seguimiento continuo de tu caso: Tu cita está asegurada";
+        cuerpoMensaje = `<p>Hola <strong>${nombre}</strong>,</p><p>Te enviamos esta breve actualización periódica para darte total tranquilidad sobre tu proceso de Ley de Memoria Democrática.</p><p>Queremos recordarte que tu cita consular sigue firmemente programada para el <strong>${fechaCitaTexto}</strong>. Sabemos que los tiempos de espera pueden parecer largos, pero todo avanza exactamente como debería.</p><p>Nosotros seguimos vigilando tu expediente de cerca. No tienes que preocuparte por nada; te avisaremos oportunamente cuando llegue el momento de actuar.</p>`;
+      } else {
+        // Texto original de gestión de cita
+        asunto = "Estado de tu trámite LMD - Gestión de cita";
+        cuerpoMensaje = `<p>¡Hola <strong>${nombre}</strong>!</p><p>Te escribimos para confirmarte que tu expediente está completamente listo y validado por nuestro equipo.</p><p>Actualmente nos encontramos a la espera de que se habilite disponibilidad en la sede correspondiente para poder agendar tu cita, o bien, aguardando que nos confirmes tus fechas de preferencia. La apertura de agendas por parte de la administración suele ser intermitente, pero estamos monitoreando activamente la situación para asegurar tu presentación.</p><p>Tu gestión está segura con nosotros; te avisaremos enseguida al tener la confirmación.</p>`;
+      }
       break;
     case "PENDIENTE DE CREDENCIALES":
       asunto = "Aviso importante sobre tu trámite LMD - Credenciales pendientes";
       cuerpoMensaje = `<p>Hola <strong>${nombre}</strong>, esperamos que estés teniendo un buen día.</p><p>Te contactamos para recordarte que seguimos a la espera de las credenciales de acceso emitidas por las autoridades para poder avanzar con la gestión de tu cita.</p><p>Llevamos el control exacto de tu proceso y este es el paso que nos detiene en este momento. Si ya has recibido esta información o necesitas alguna información adicional, por favor escríbenos a <strong>${RESPONDER_A}</strong> y te responderemos lo antes posible.</p>`;
+      
+      // Lógica Dinámica: Inyección del Termómetro si aplica
+      let infoValor = "";
+      let consuladoUpper = (contexto.consulado || "").toUpperCase();
+      if (consuladoUpper.includes("HABANA") && contexto.termometroHabana) {
+        infoValor = obtenerBloqueValorHTML("La Habana", contexto.termometroHabana, oro);
+      } else if (consuladoUpper.includes("MIAMI") && contexto.termometroMiami) {
+        infoValor = obtenerBloqueValorHTML("Miami", contexto.termometroMiami, oro);
+      }
+      
+      if (infoValor !== "") {
+        cuerpoMensaje += infoValor;
+      }
       break;
     case "RECURSO PRESENTADO":
       asunto = "Seguimiento de tu expediente LMD - Recurso en proceso";
@@ -103,6 +125,18 @@ function obtenerPlantillaHTML(nombre, estado, enlaceBaja) {
     </html>
   `;
   return { asunto: asunto, cuerpo: htmlTemplate };
+}
+
+// ----------------------------------------------------------------------
+// FUNCIÓN AUXILIAR PARA EL BLOQUE DE INFORMACIÓN (Termómetro)
+// ----------------------------------------------------------------------
+function obtenerBloqueValorHTML(ciudad, fecha, colorOro) {
+  return `
+  <div style="background-color: #fcfcfc; border-left: 4px solid ${colorOro}; padding: 15px; margin-top: 25px; border-radius: 0 4px 4px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+    <p style="margin-top: 0; font-size: 14px; color: #333;">💡 <strong>Información de valor:</strong></p>
+    <p style="margin-bottom: 0; font-size: 14px; color: #444;">Basado exclusivamente en las estadísticas internas de los casos gestionados por Estela Marina, actualmente el Consulado de <strong>${ciudad}</strong> está procesando y entregando las credenciales de aquellos clientes que aplicaron aproximadamente el <strong>${fecha}</strong>.</p>
+    <p style="margin-bottom: 0; font-size: 12px; color: #888; margin-top: 12px; line-height: 1.4;"><em>(Nota: Tenga en cuenta que este es un dato de referencia propio de nuestro despacho para ayudarle a estimar los tiempos, y no representa un comunicado oficial del Consulado).</em></p>
+  </div>`;
 }
 
 function renderHtmlResponse(titulo, mensaje, exito) {
