@@ -1,0 +1,25 @@
+// ==========================================
+// MÓDULO 08: BACKEND PARA INTERFAZ GRÁFICA
+// ==========================================
+
+function obtenerConfiguracionActual() {
+  return {
+    MODO_PRUEBA: getConfig("MODO_PRUEBA"),
+    EMAIL_PRUEBA: getConfig("EMAIL_PRUEBA"),
+    DIAS_CARENCIA_RESOLUCION: getConfig("DIAS_CARENCIA_RESOLUCION"),
+    DIAS_CICLO_SEGUIMIENTO: getConfig("DIAS_CICLO_SEGUIMIENTO"),
+    DIAS_CICLO_TRAMITES: getConfig("DIAS_CICLO_TRAMITES"),
+    COLOR_ORO: getConfig("COLOR_ORO"),
+    COLOR_TEXTO: getConfig("COLOR_TEXTO"),
+    COLOR_FONDO: getConfig("COLOR_FONDO"),
+    URL_LOGO_PUBLICO: getConfig("URL_LOGO_PUBLICO")
+  };
+}
+
+function guardarConfiguracion(datos) {
+  const propiedades = PropertiesService.getDocumentProperties();
+  for (const key in datos) {
+    propiedades.setProperty(key, datos[key].toString());
+  }
+  return true;
+}

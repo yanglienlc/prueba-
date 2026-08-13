@@ -1,0 +1,24 @@
+// ==========================================
+// MÓDULO 07: OBSERVADOR AUTOMÁTICO (ONEDIT)
+// ==========================================
+
+function onEdit(e) {
+  if (!e || !e.range) return;
+  
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== SHEET_NAME) return;
+
+  const colInicio = e.range.getColumn();
+  const colFin = colInicio + e.range.getWidth() - 1;
+  const filaInicio = e.range.getRow();
+  const filaFin = filaInicio + e.range.getHeight() - 1;
+
+  if (colInicio <= 6 && colFin >= 6) {
+    for (let i = filaInicio; i <= filaFin; i++) {
+      if (i > 1) {
+        sheet.getRange(i, 11).clearContent();
+        sheet.getRange(i, 12).clearContent();
+      }
+    }
+  }
+}

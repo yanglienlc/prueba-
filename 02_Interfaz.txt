@@ -1,0 +1,41 @@
+// ==========================================
+// MÓDULO 02: INTERFAZ Y MODALES
+// ==========================================
+
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('🚀 Expedientes LMD')
+    .addItem('⚙️ Panel de Control', 'abrirPanelControl')
+    .addSeparator()
+    .addItem('1. Verificar Vencimientos (Manual)', 'ejecutarAuditorManual')
+    .addItem('2. Enviar Correos Pendientes', 'ejecutarEnviosManual')
+    .addToUi();
+}
+
+function abrirPanelControl() {
+  const html = HtmlService.createTemplateFromFile('Modal_PanelControl').evaluate()
+    .setWidth(550)
+    .setHeight(650);
+  SpreadsheetApp.getUi().showModalDialog(html, '⚙️ Panel de Configuración');
+}
+
+// Puentes para capturar el resultado y mostrar la ventana emergente en lugar de la alerta gris
+function ejecutarAuditorManual() {
+  const resultado = trabajadorNocturno(); // Devolverá un objeto
+  mostrarReporte("Verificación de Vencimientos", resultado);
+}
+
+function ejecutarEnviosManual() {
+  const resultado = procesarNotificacionesLMD(); // Devolverá un objeto
+  mostrarReporte("Envío de Notificaciones", resultado);
+}
+
+function mostrarReporte(titulo, resultado) {
+  // Evitar error si se canceló por estar vacío
+  if (!resultado || resultado.cancelado) return; 
+  
+  const plantilla = HtmlService.createTemplateFromFile('Modal_Reporte');
+  plantilla.titulo = titulo;
+  plantilla.datos = JSON.stringify(resultado); 
+  const html = plantilla.evaluate().setWidth(500).setHeight(550);
+  SpreadsheetApp.getUi().showModalDialog(html, '📊 Reporte del Sistema');
+}

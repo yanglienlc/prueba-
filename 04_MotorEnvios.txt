@@ -1,0 +1,189 @@
+// ==========================================
+// MÓDULO 04: MOTOR DE ENVÍOS (CON PAGINACIÓN Y LOGS)
+// ==========================================
+
+function procesarNotificacionesLMD() {
+  const startTime = Date.now();
+  const MAX_EXECUTION_TIME = 270000; // 4.5 minutos
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) return null;
+
+  const dataRange = sheet.getDataRange();
+  const data = dataRange.getValues();
+  const richData = dataRange.getRichTextValues(); 
+  
+  const hoy = new Date();
+  
+  // Memoria del sistema (Bóveda)
+  const props = PropertiesService.getDocumentProperties();
+  let startRow = parseInt(props.getProperty('LAST_ROW_ENVIOS'), 10) || 1;
+  let enviados = parseInt(props.getProperty('ENVIADOS_REALES'), 10) || 0;
+  
+  let conteoSimulacro = JSON.parse(props.getProperty('CONTEO_SIMULACRO') || '{}');
+  let muestrasSimulacro = JSON.parse(props.getProperty('MUESTRAS_SIMULACRO') || '{}');
+  let totalSimulacro = parseInt(props.getProperty('TOTAL_SIMULACRO'), 10) || 0;
+
+  const estadosTerminales = ["RESUELTO FAVORABLE", "RESUELTO DENEGADO", "RESUELTO", "NO PRESENTADO", "RECURSO FAVORABLE", "RECURSO DENEGADO"];
+  const estadosFinalesRecurso = ["RECURSO FAVORABLE", "RECURSO DENEGADO"];
+
+  const modoPrueba = getConfig("MODO_PRUEBA");
+  const emailPrueba = getConfig("EMAIL_PRUEBA");
+
+  if (startRow === 1) {
+    console.log(`🚀 Iniciando Motor de Envíos. Filas a evaluar: ${data.length - 1}. Modo Prueba: ${modoPrueba ? "ACTIVO" : "INACTIVO"}`);
+  } else {
+    console.log(`🔄 Reanudando Motor de Envíos desde la fila ${startRow}...`);
+  }
+
+  let pausado = false;
+
+  for (let i = startRow; i < data.length; i++) {
+    
+    // --- ESCUDO DE TIEMPO (PARACAÍDAS) ---
+    if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+      console.log(`⚠️ ALERTA: Límite de 4.5 min alcanzado en la Fila ${i}. Guardando Checkpoint.`);
+      
+      props.setProperty('LAST_ROW_ENVIOS', i.toString());
+      props.setProperty('ENVIADOS_REALES', enviados.toString());
+      props.setProperty('CONTEO_SIMULACRO', JSON.stringify(conteoSimulacro));
+      props.setProperty('MUESTRAS_SIMULACRO', JSON.stringify(muestrasSimulacro));
+      props.setProperty('TOTAL_SIMULACRO', totalSimulacro.toString());
+
+      const oldTriggerId = props.getProperty('TEMP_TRIGGER_ENVIOS');
+      if (oldTriggerId) {
+        ScriptApp.getProjectTriggers().forEach(t => {
+          if (t.getUniqueId() === oldTriggerId) ScriptApp.deleteTrigger(t);
+        });
+      }
+
+      const newTrigger = ScriptApp.newTrigger('procesarNotificacionesLMD').timeBased().after(60 * 1000).create();
+      props.setProperty('TEMP_TRIGGER_ENVIOS', newTrigger.getUniqueId());
+      
+      pausado = true;
+      break;
+    }
+    // ------------------------------------
+
+    const nombre = String(data[i][0]).trim();
+    const apellido = String(data[i][1]).trim();
+    const correoCreado = String(data[i][3]).trim().toLowerCase(); 
+    const estado = String(data[i][5]).trim().toUpperCase();
+    const id = String(data[i][8]).trim();
+    const emailCliente = extraerEmailReal(data[i][9], richData[i][9]); 
+    const notificado = String(data[i][10]).trim().toUpperCase();
+    const baja = String(data[i][12]).trim().toUpperCase();
+    const nombreCompleto = nombre + " " + apellido;
+
+    if (!emailCliente.includes("@") || baja === "SI") continue;
+    
+    const esCorreoPersonal = correoCreado.includes("correo personal");
+    const esEstadoFinal = estadosTerminales.includes(estado);
+    const esEstadoFinalDeRecurso = estadosFinalesRecurso.includes(estado);
+
+    if (esCorreoPersonal && esEstadoFinal && !esEstadoFinalDeRecurso) {
+      if (notificado !== "SI") {
+        if (!modoPrueba) {
+          sheet.getRange(i + 1, 11).setValue("SI"); 
+          registrarLog(id, nombreCompleto, emailCliente, "Bloqueado (Correo Personal)", `Estado: ${estado} notificado por cliente.`);
+          console.log(`[FILA ${i+1}] | ID: ${id} | ${emailCliente} : 🛑 Acción -> BLOQUEADO (Correo Personal).`);
+        }
+      }
+      continue;
+    }
+
+    let enviarHoy = false;
+    if (esEstadoFinal && notificado !== "SI") enviarHoy = true;
+    else if (!esEstadoFinal && notificado === "NO") enviarHoy = true;
+
+    if (enviarHoy) {
+      const estadoParaPlantilla = (esCorreoPersonal && !esEstadoFinal) ? "CORREO_PERSONAL_PENDIENTE" : estado;
+      
+      if (modoPrueba) {
+        conteoSimulacro[estado] = (conteoSimulacro[estado] || 0) + 1;
+        totalSimulacro++;
+        console.log(`[FILA ${i+1}] | ID: ${id} | ${emailCliente} : 🟡 Acción -> SIMULACRO PREPARADO (${estado}).`);
+        
+        if (!muestrasSimulacro[estado]) {
+          const token = generarToken(id, emailCliente);
+          muestrasSimulacro[estado] = {
+            nombre: nombre, emailOriginal: emailCliente, estadoPlantilla: estadoParaPlantilla,
+            enlaceBaja: `${WEB_APP_URL}?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`
+          };
+        }
+      } else {
+        const token = generarToken(id, emailCliente);
+        const enlaceBaja = `${WEB_APP_URL}?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`;
+        const plantilla = obtenerPlantillaHTML(nombre, estadoParaPlantilla, enlaceBaja);
+
+        if (plantilla) {
+          try {
+            GmailApp.sendEmail(emailCliente, plantilla.asunto, "", {
+              htmlBody: plantilla.cuerpo, from: REMITENTE, replyTo: RESPONDER_A, name: SENDER_NAME
+            });
+            sheet.getRange(i + 1, 11).setValue("SI");
+            sheet.getRange(i + 1, 12).setValue(hoy);
+            enviados++;
+            registrarLog(id, nombreCompleto, emailCliente, "Notificación Enviada", `Estado: ${estado}`);
+            console.log(`[FILA ${i+1}] | ID: ${id} | ${emailCliente} : 🟢 Acción -> CORREO ENVIADO CON ÉXITO.`);
+          } catch (e) {
+            registrarLog(id, nombreCompleto, emailCliente, "Error de Envío", e.message);
+            console.error(`[FILA ${i+1}] | ID: ${id} | ${emailCliente} : 🔴 Acción -> ERROR DE ENVÍO (${e.message}).`);
+          }
+        }
+      }
+    }
+  }
+
+  // --- EJECUCIÓN FINAL (SÓLO SI NO HUBO PAUSAS) ---
+  if (!pausado) {
+    console.log(`✅ Proceso del Motor de Envíos completado al 100%. Limpiando memoria.`);
+    
+    // Envíos de Reporte y Muestras de Sandbox
+    if (modoPrueba && totalSimulacro > 0) {
+      for (let estado in muestrasSimulacro) {
+        let datos = muestrasSimulacro[estado];
+        let plantilla = obtenerPlantillaHTML(datos.nombre, datos.estadoPlantilla, datos.enlaceBaja);
+        
+        if (plantilla) {
+          let etiquetaAviso = `<div style="background-color: #ffeb3b; padding: 15px; text-align: center; font-weight: bold; color: #000; font-family: Arial;">⚠️ MODO PRUEBA ACTIVO ⚠️<br>El/los destinatario(s) original(es) de este correo:<br>${datos.emailOriginal}</div><br>`;
+          GmailApp.sendEmail(emailPrueba, `[SIMULACRO: ${estado}] ${plantilla.asunto}`, "", {
+            htmlBody: etiquetaAviso + plantilla.cuerpo, from: REMITENTE, replyTo: RESPONDER_A, name: SENDER_NAME
+          });
+        }
+      }
+      // Reporte de mando Sandbox
+      let reporteHTML = `<div style="font-family: Arial; padding: 20px;"><h2>📊 REPORTE DE MANDO - SIMULACRO LMD</h2>`;
+      reporteHTML += `<p>El sistema ha evaluado toda la base de datos <strong>sin modificar ningún expediente</strong>.</p>`;
+      reporteHTML += `<p>Si esto fuera producción (MODO_PRUEBA = false), se habrían enviado un total de <strong>${totalSimulacro}</strong> correos distribuidos de la siguiente forma:</p><ul>`;
+      for (let est in conteoSimulacro) { reporteHTML += `<li style="margin-bottom: 5px;"><strong>${est}:</strong> ${conteoSimulacro[est]} expediente(s)</li>`; }
+      reporteHTML += `</ul><p><em>* Se ha enviado a esta bandeja un correo de muestra por cada estado detectado hoy para validar el diseño.</em></p></div>`;
+
+      GmailApp.sendEmail(emailPrueba, `📊 [REPORTE SIMULACRO] - LMD enviaría ${totalSimulacro} correos hoy`, "", {
+        htmlBody: reporteHTML, from: REMITENTE, replyTo: RESPONDER_A, name: SENDER_NAME
+      });
+    }
+
+    // Limpiar Bóveda
+    const keysToDelete = ['LAST_ROW_ENVIOS', 'ENVIADOS_REALES', 'CONTEO_SIMULACRO', 'MUESTRAS_SIMULACRO', 'TOTAL_SIMULACRO'];
+    keysToDelete.forEach(k => props.deleteProperty(k));
+    
+    const oldTriggerId = props.getProperty('TEMP_TRIGGER_ENVIOS');
+    if (oldTriggerId) {
+      ScriptApp.getProjectTriggers().forEach(t => {
+        if (t.getUniqueId() === oldTriggerId) ScriptApp.deleteTrigger(t);
+      });
+      props.deleteProperty('TEMP_TRIGGER_ENVIOS');
+    }
+  }
+
+  return {
+    tipo: 'envio',
+    prueba: modoPrueba,
+    enviados: enviados,
+    simulacro: totalSimulacro,
+    desglose: conteoSimulacro,
+    emailDestino: emailPrueba,
+    pausado: pausado
+  };
+}

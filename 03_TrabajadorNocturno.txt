@@ -1,0 +1,120 @@
+// ==========================================
+// MÓDULO 03: TRABAJADOR NOCTURNO (CON PAGINACIÓN Y LOGS)
+// ==========================================
+
+function trabajadorNocturno() {
+  const startTime = Date.now();
+  const MAX_EXECUTION_TIME = 270000; // 4.5 minutos de límite seguro
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) return null;
+
+  const data = sheet.getDataRange().getValues();
+  const hoy = new Date();
+
+  // Memoria del sistema (Bóveda)
+  const props = PropertiesService.getDocumentProperties();
+  let startRow = parseInt(props.getProperty('LAST_ROW_NOCTURNO'), 10) || 1;
+  let actualizaciones = parseInt(props.getProperty('ACUMULADO_NOCTURNO'), 10) || 0;
+
+  // Configuración dinámica
+  const modoPrueba = getConfig("MODO_PRUEBA");
+  const cicloTramites = getConfig("DIAS_CICLO_TRAMITES");
+  const cicloSeguimiento = getConfig("DIAS_CICLO_SEGUIMIENTO");
+  const carenciaResolucion = getConfig("DIAS_CARENCIA_RESOLUCION");
+
+  if (startRow === 1) {
+    console.log(`🕒 Iniciando Auditor Nocturno. Filas a evaluar: ${data.length - 1}. Modo Prueba: ${modoPrueba ? "ACTIVO" : "INACTIVO"}`);
+  } else {
+    console.log(`🔄 Reanudando Auditor Nocturno desde la fila ${startRow}...`);
+  }
+
+  let pausado = false;
+
+  for (let i = startRow; i < data.length; i++) {
+    
+    // --- ESCUDO DE TIEMPO (PARACAÍDAS) ---
+    if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+      console.log(`⚠️ ALERTA: Límite de 4.5 min alcanzado en la Fila ${i}. Guardando Checkpoint.`);
+      
+      props.setProperty('LAST_ROW_NOCTURNO', i.toString());
+      props.setProperty('ACUMULADO_NOCTURNO', actualizaciones.toString());
+
+      // Eliminar trigger temporal anterior si existía
+      const oldTriggerId = props.getProperty('TEMP_TRIGGER_NOCTURNO');
+      if (oldTriggerId) {
+        ScriptApp.getProjectTriggers().forEach(t => {
+          if (t.getUniqueId() === oldTriggerId) ScriptApp.deleteTrigger(t);
+        });
+      }
+
+      // Crear nuevo trigger temporal de reanudación
+      const newTrigger = ScriptApp.newTrigger('trabajadorNocturno').timeBased().after(60 * 1000).create();
+      props.setProperty('TEMP_TRIGGER_NOCTURNO', newTrigger.getUniqueId());
+      
+      pausado = true;
+      break;
+    }
+    // ------------------------------------
+
+    const id = String(data[i][8]).trim();
+    const estado = String(data[i][5]).trim().toUpperCase();
+    const detalle = String(data[i][6]).trim();
+    const notificado = String(data[i][10]).trim().toUpperCase(); 
+    const fechaUltimaRaw = data[i][11]; 
+    const baja = String(data[i][12]).trim().toUpperCase(); 
+
+    if (baja === "SI" || notificado === "NO") continue;
+
+    let fechaUltima = (fechaUltimaRaw && fechaUltimaRaw instanceof Date) ? fechaUltimaRaw : null;
+    let diasTranscurridos = fechaUltima ? Math.floor((hoy - fechaUltima) / (1000 * 60 * 60 * 24)) : 9999;
+    let necesitaEnvio = false;
+
+    if (estado === "PENDIENTE DE CITA" || estado === "PENDIENTE DE CREDENCIALES") {
+      if (diasTranscurridos >= cicloTramites) necesitaEnvio = true;
+    } 
+    else if (estado === "RECURSO PRESENTADO") {
+      if (diasTranscurridos >= cicloSeguimiento) necesitaEnvio = true;
+    }
+    else if (estado === "PENDIENTE RESOLUCION") {
+      let fechaCita = extraerFechaDeDetalle(detalle);
+      let carenciaSuperada = true; 
+      
+      if (fechaCita) {
+        let diasDesdeCita = Math.floor((hoy - fechaCita) / (1000 * 60 * 60 * 24));
+        if (diasDesdeCita < carenciaResolucion) carenciaSuperada = false;
+      }
+      if (carenciaSuperada && diasTranscurridos >= cicloSeguimiento) necesitaEnvio = true;
+    }
+
+    if (necesitaEnvio) {
+      if (!modoPrueba) {
+        sheet.getRange(i + 1, 11).setValue("NO");
+      }
+      actualizaciones++;
+      console.log(`[FILA ${i+1}] | ID: ${id || 'N/A'} - Estado expirado (${estado}). Marcado para envío ("NO").`);
+    }
+  }
+  
+  if (!pausado) {
+    console.log(`✅ Auditoría completada al 100%. Total expedientes marcados: ${actualizaciones}. Limpiando memoria.`);
+    
+    // Limpieza de bóveda y triggers temporales
+    props.deleteProperty('LAST_ROW_NOCTURNO');
+    props.deleteProperty('ACUMULADO_NOCTURNO');
+    const oldTriggerId = props.getProperty('TEMP_TRIGGER_NOCTURNO');
+    if (oldTriggerId) {
+      ScriptApp.getProjectTriggers().forEach(t => {
+        if (t.getUniqueId() === oldTriggerId) ScriptApp.deleteTrigger(t);
+      });
+      props.deleteProperty('TEMP_TRIGGER_NOCTURNO');
+    }
+  }
+
+  return {
+    tipo: 'auditoria',
+    prueba: modoPrueba,
+    procesados: actualizaciones,
+    pausado: pausado
+  };
+}
