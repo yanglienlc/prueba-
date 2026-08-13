@@ -11,6 +11,9 @@ function trabajadorNocturno() {
 
   const data = sheet.getDataRange().getValues();
   const hoy = new Date();
+  
+  // Limpiamos las horas para comparar fechas exactas
+  const hoyLimpio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
 
   // Memoria del sistema (Bóveda)
   const props = PropertiesService.getDocumentProperties();
@@ -40,7 +43,6 @@ function trabajadorNocturno() {
       props.setProperty('LAST_ROW_NOCTURNO', i.toString());
       props.setProperty('ACUMULADO_NOCTURNO', actualizaciones.toString());
 
-      // Eliminar trigger temporal anterior si existía
       const oldTriggerId = props.getProperty('TEMP_TRIGGER_NOCTURNO');
       if (oldTriggerId) {
         ScriptApp.getProjectTriggers().forEach(t => {
@@ -48,7 +50,6 @@ function trabajadorNocturno() {
         });
       }
 
-      // Crear nuevo trigger temporal de reanudación
       const newTrigger = ScriptApp.newTrigger('trabajadorNocturno').timeBased().after(60 * 1000).create();
       props.setProperty('TEMP_TRIGGER_NOCTURNO', newTrigger.getUniqueId());
       
@@ -64,8 +65,40 @@ function trabajadorNocturno() {
     const fechaUltimaRaw = data[i][11]; 
     const baja = String(data[i][12]).trim().toUpperCase(); 
 
-    if (baja === "SI" || notificado === "NO") continue;
+    if (baja === "SI") continue; // Si está de baja, el robot ni lo mira
 
+    // ==============================================================
+    // 🤖 NUEVO: MOTOR DE AUTOMATIZACIÓN DE ESTADOS (CITA ALCANZADA)
+    // ==============================================================
+    if (estado === "PENDIENTE DE CITA" && detalle.toUpperCase().startsWith("CITA PROGRAMADA")) {
+      let fechaCita = extraerFechaDeDetalle(detalle);
+      
+      if (fechaCita) {
+        let fechaCitaLimpia = new Date(fechaCita.getFullYear(), fechaCita.getMonth(), fechaCita.getDate());
+        
+        // Si el día de la cita es HOY o ya pasó...
+        if (hoyLimpio >= fechaCitaLimpia) {
+          if (!modoPrueba) {
+            let fechaStr = Utilities.formatDate(fechaCita, Session.getScriptTimeZone(), "dd/MM/yyyy");
+            
+            sheet.getRange(i + 1, 6).setValue("PENDIENTE RESOLUCION"); // F: Actualiza Estado
+            sheet.getRange(i + 1, 7).setValue(`CITA ${fechaStr}`);       // G: Formatea Detalle
+            
+            // Limpiamos notificaciones para que el Motor de Envíos tome el relevo
+            sheet.getRange(i + 1, 11).clearContent(); // K
+            sheet.getRange(i + 1, 12).clearContent(); // L
+          }
+          actualizaciones++;
+          console.log(`[FILA ${i+1}] | ID: ${id || 'N/A'} - 🤖 Cita alcanzada. Auto-actualizado a PENDIENTE RESOLUCION.`);
+          continue; // Como ya lo procesamos, saltamos a la siguiente fila
+        }
+      }
+    }
+    // ==============================================================
+
+    if (notificado === "NO") continue; // Si tiene correos pendientes, el auditor de tiempos lo salta
+
+    // --- AUDITORÍA DE TIEMPOS DE ESPERA ---
     let fechaUltima = (fechaUltimaRaw && fechaUltimaRaw instanceof Date) ? fechaUltimaRaw : null;
     let diasTranscurridos = fechaUltima ? Math.floor((hoy - fechaUltima) / (1000 * 60 * 60 * 24)) : 9999;
     let necesitaEnvio = false;
@@ -97,9 +130,8 @@ function trabajadorNocturno() {
   }
   
   if (!pausado) {
-    console.log(`✅ Auditoría completada al 100%. Total expedientes marcados: ${actualizaciones}. Limpiando memoria.`);
+    console.log(`✅ Auditoría completada al 100%. Total de acciones: ${actualizaciones}. Limpiando memoria.`);
     
-    // Limpieza de bóveda y triggers temporales
     props.deleteProperty('LAST_ROW_NOCTURNO');
     props.deleteProperty('ACUMULADO_NOCTURNO');
     const oldTriggerId = props.getProperty('TEMP_TRIGGER_NOCTURNO');
