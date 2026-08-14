@@ -1,0 +1,544 @@
+// ==========================================
+// MÓDULO 09: VERIFICADOR CONSULAR LMD (v6.0 - DICIREG + FECHAS LIMPIAS)
+// ==========================================
+
+// --- CONSTANTES DEL MÓDULO ---
+const SHEET_VERIFICACION       = "VERIFICACION_CONSULAR";
+const API_LOGIN_URL            = "https://cgelahabana.es/api/login";
+const API_EXPEDIENTES_BASE_URL = "https://cgelahabana.es/api/expedientes/";
+const SUFIJO_LMD_GET           = "-LMD";       // Para el GET /api/expedientes/{id}
+const SUFIJO_LMD_LOGIN         = "-LMD ";      // Para el POST /api/login (con espacio final requerido)
+const CONSULADO_OBJETIVO       = "LA HABANA";  // Consulado a filtrar (Col C)
+const ESTADO_A_VERIFICAR       = "PENDIENTE RESOLUCION"; // Exacto, sin tilde (Col F)
+
+// Índices de columnas en la hoja EXPEDIENTES LMD (base 0)
+const SRC_COL_NOMBRE        = 0; // Columna A
+const SRC_COL_APELLIDOS     = 1; // Columna B
+const SRC_COL_CONSULADO     = 2; // Columna C
+const SRC_COL_CORREO        = 3; // Columna D
+const SRC_COL_EXPEDIENTE    = 4; // Columna E
+const SRC_COL_ESTADO        = 5; // Columna F
+const SRC_COL_IDENTIFICADOR = 8; // Columna I
+
+// Índices de columnas en VERIFICACION_CONSULAR (base 0)
+const VCOL_NOMBRE            = 0;
+const VCOL_APELLIDOS         = 1;
+const VCOL_EXPEDIENTE        = 2;
+const VCOL_IDENTIFICADOR     = 3;
+const VCOL_ESTADO_CONSULADO  = 4;
+const VCOL_NOMBRE_SISTEMA    = 5;
+const VCOL_PROGENITOR        = 6;
+const VCOL_FECHA_PORTAL      = 7;
+const VCOL_FECHA_RESOLUCION  = 8;
+const VCOL_FECHA_INSCRIPCION = 9;
+const VCOL_DATOS_REGISTRALES = 10;
+const VCOL_RESULTADO         = 11;
+const VCOL_ULTIMA_VERIF      = 12;
+
+// Cabeceras de la hoja de resultados
+const HEADERS_VERIFICACION = [
+  'Nombre', 'Apellidos', 'Nº Expediente', 'Identificador',
+  'Estado Consulado', 'Nombre en Sistema', 'Progenitor',
+  'Fecha Act. Portal', 'Fecha Resolución', 'Fecha Inscripción',
+  'Datos Registrales', 'Resultado', 'Última Verificación'
+];
+
+
+// ==========================================
+// MODO 1: INTERFAZ INTERACTIVA (MODAL EN VIVO)
+// ==========================================
+
+function ejecutarEstadoConsularManual() {
+  const html = HtmlService.createTemplateFromFile('Modal_EstadoConsular')
+    .evaluate()
+    .setWidth(580)
+    .setHeight(680);
+
+  SpreadsheetApp.getUi().showModalDialog(html, '🔍 Estado consular La Habana');
+}
+
+function obtenerListaExpedientesLaHabana() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getSheetByName(SHEET_NAME);
+  if (!sourceSheet) return { ok: false, mensaje: `No se encontró la hoja "${SHEET_NAME}".` };
+
+  const data = sourceSheet.getDataRange().getValues();
+  const candidatos = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const fila          = data[i];
+    const nombre        = String(fila[SRC_COL_NOMBRE]        || '').trim();
+    const apellidos     = String(fila[SRC_COL_APELLIDOS]     || '').trim();
+    const consulado     = String(fila[SRC_COL_CONSULADO]     || '').trim().toUpperCase();
+    const noExpediente  = String(fila[SRC_COL_EXPEDIENTE]    || '').trim();
+    const estado        = String(fila[SRC_COL_ESTADO]        || '').trim();
+    const identificador = String(fila[SRC_COL_IDENTIFICADOR] || '').trim();
+
+    // CAPA 0: Consulado LA HABANA
+    if (!consulado.includes(CONSULADO_OBJETIVO)) continue;
+
+    // CAPA 1: Estado PENDIENTE RESOLUCION
+    if (estado !== ESTADO_A_VERIFICAR) continue;
+
+    // CAPA 2: Expediente válido DDMMYY-NNN
+    if (!noExpediente || !_vc_esFormatoValido(noExpediente)) continue;
+
+    // CAPA 3: Identificador no vacío
+    if (!identificador) continue;
+
+    candidatos.push({
+      rowIndex: i + 1,
+      nombre: nombre,
+      apellidos: apellidos,
+      nombreCompleto: `${nombre} ${apellidos}`.trim(),
+      noExpediente: noExpediente,
+      identificador: identificador
+    });
+  }
+
+  const modoPrueba = getConfig("MODO_PRUEBA");
+  return {
+    ok: true,
+    total: candidatos.length,
+    candidatos: candidatos,
+    modoPrueba: modoPrueba
+  };
+}
+
+function procesarUnExpedienteConsular(item) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const resultSheet = _vc_obtenerOCrearHojaResultados(ss);
+  const idToRow = _vc_construirMapaIdentificadores(resultSheet);
+
+  const nombre        = item.nombre || '';
+  const apellidos     = item.apellidos || '';
+  const noExpediente  = item.noExpediente || '';
+  const identificador = item.identificador || '';
+  const nombreCompleto= item.nombreCompleto || `${nombre} ${apellidos}`.trim();
+
+  // Consultar la API del consulado con Cascada Inteligente
+  const apiResult = _vc_consultarAPI(apellidos, noExpediente);
+
+  const ahora = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    'dd/MM/yyyy HH:mm:ss'
+  );
+
+  let rowData;
+  let resStatus;
+  let estadoConsulado = '';
+
+  if (apiResult.ok) {
+    const d = apiResult.datos;
+    estadoConsulado = d.estado || 'En Trámite';
+    resStatus = 'OK';
+
+    const fechaResolucionLimpia  = _vc_extraerFecha(d.fechaResolucion);
+    const fechaInscripcionLimpia = _vc_extraerFecha(d.fechaInscripcion);
+    const datosRegistralesTexto  = _vc_formatarRegistrales(d);
+
+    rowData = [
+      nombre,
+      apellidos,
+      noExpediente,
+      identificador,
+      estadoConsulado,
+      d.nombre              || '',
+      d.nombreProgenitor    || '',
+      d.updated             || '',
+      fechaResolucionLimpia,
+      fechaInscripcionLimpia,
+      datosRegistralesTexto,
+      'OK',
+      ahora
+    ];
+
+    const notaVariante = apiResult.varianteUsada !== apellidos 
+      ? ` (Coincidencia con: "${apiResult.varianteUsada}")` 
+      : '';
+
+    _vc_logExpediente(ss, identificador, nombreCompleto, noExpediente, 'Consulta Consular', `Estado: ${estadoConsulado}${notaVariante}`);
+
+  } else if (apiResult.noEncontrado) {
+    resStatus = 'NO_ENCONTRADO';
+    rowData = [
+      nombre, apellidos, noExpediente, identificador,
+      '', '', '', '', '', '', '',
+      'NO ENCONTRADO',
+      ahora
+    ];
+
+    _vc_logExpediente(ss, identificador, nombreCompleto, noExpediente, 'No Encontrado', 'Verificadas 4 variantes de apellidos sin coincidencia');
+
+  } else {
+    resStatus = 'ERROR';
+    rowData = [
+      nombre, apellidos, noExpediente, identificador,
+      '', '', '', '', '', '', '',
+      'ERROR SERVIDOR',
+      ahora
+    ];
+
+    _vc_logExpediente(ss, identificador, nombreCompleto, noExpediente, 'Error Conexión', apiResult.detalle || 'Error API');
+  }
+
+  const filaDestino = idToRow[identificador];
+  if (filaDestino) {
+    resultSheet.getRange(filaDestino, 1, 1, rowData.length).setValues([rowData]);
+  } else {
+    const nuevaFila = resultSheet.getLastRow() + 1;
+    resultSheet.getRange(nuevaFila, 1, 1, rowData.length).setValues([rowData]);
+  }
+
+  return {
+    ok: true,
+    resultado: resStatus,
+    estadoConsulado: estadoConsulado,
+    identificador: identificador,
+    noExpediente: noExpediente,
+    nombreCompleto: nombreCompleto,
+    varianteUsada: apiResult.varianteUsada || apellidos,
+    detalle: apiResult.detalle || ''
+  };
+}
+
+function delegarASegundoPlano(lastRowIndex) {
+  const props = PropertiesService.getDocumentProperties();
+  props.setProperty('LAST_ROW_VERIFICACION', (lastRowIndex || 1).toString());
+
+  const oldId = props.getProperty('TEMP_TRIGGER_VERIFICACION');
+  if (oldId) {
+    ScriptApp.getProjectTriggers().forEach(t => {
+      if (t.getUniqueId() === oldId) ScriptApp.deleteTrigger(t);
+    });
+  }
+
+  const newTrigger = ScriptApp.newTrigger('verificadorConsular')
+    .timeBased().after(5000).create();
+  props.setProperty('TEMP_TRIGGER_VERIFICACION', newTrigger.getUniqueId());
+
+  console.log(`🔄 Verificación delegada a segundo plano desde fila ${lastRowIndex}.`);
+  return { ok: true, mensaje: "Delegado a segundo plano correctamente." };
+}
+
+
+// ==========================================
+// MODO 2: MOTOR AUTOMÁTICO (PARA TRIGGER DE MEDIANOCHE)
+// ==========================================
+
+function verificadorConsular() {
+  const startTime = Date.now();
+  const MAX_EXECUTION_TIME = 270000; // 4.5 minutos
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getSheetByName(SHEET_NAME);
+  if (!sourceSheet) return { ok: false, error: true };
+
+  const resultSheet = _vc_obtenerOCrearHojaResultados(ss);
+  const idToRow = _vc_construirMapaIdentificadores(resultSheet);
+
+  const props = PropertiesService.getDocumentProperties();
+  let startRow     = parseInt(props.getProperty('LAST_ROW_VERIFICACION'),  10) || 1;
+  let consultados  = parseInt(props.getProperty('ACUM_VC_CONSULTADOS'),    10) || 0;
+  let actualizados = parseInt(props.getProperty('ACUM_VC_ACTUALIZADOS'),   10) || 0;
+  let noEncontrados= parseInt(props.getProperty('ACUM_VC_NO_ENCONTRADOS'), 10) || 0;
+  let errores      = parseInt(props.getProperty('ACUM_VC_ERRORES'),        10) || 0;
+  let omitidos     = parseInt(props.getProperty('ACUM_VC_OMITIDOS'),       10) || 0;
+
+  const data = sourceSheet.getDataRange().getValues();
+  let pausado = false;
+
+  for (let i = startRow; i < data.length; i++) {
+
+    if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+      props.setProperty('LAST_ROW_VERIFICACION',   i.toString());
+      props.setProperty('ACUM_VC_CONSULTADOS',     consultados.toString());
+      props.setProperty('ACUM_VC_ACTUALIZADOS',    actualizados.toString());
+      props.setProperty('ACUM_VC_NO_ENCONTRADOS',  noEncontrados.toString());
+      props.setProperty('ACUM_VC_ERRORES',         errores.toString());
+      props.setProperty('ACUM_VC_OMITIDOS',        omitidos.toString());
+
+      const oldId = props.getProperty('TEMP_TRIGGER_VERIFICACION');
+      if (oldId) {
+        ScriptApp.getProjectTriggers().forEach(t => {
+          if (t.getUniqueId() === oldId) ScriptApp.deleteTrigger(t);
+        });
+      }
+
+      const newTrigger = ScriptApp.newTrigger('verificadorConsular')
+        .timeBased().after(60 * 1000).create();
+      props.setProperty('TEMP_TRIGGER_VERIFICACION', newTrigger.getUniqueId());
+
+      pausado = true;
+      break;
+    }
+
+    const fila          = data[i];
+    const nombre        = String(fila[SRC_COL_NOMBRE]        || '').trim();
+    const apellidos     = String(fila[SRC_COL_APELLIDOS]     || '').trim();
+    const consulado     = String(fila[SRC_COL_CONSULADO]     || '').trim().toUpperCase();
+    const noExpediente  = String(fila[SRC_COL_EXPEDIENTE]    || '').trim();
+    const estado        = String(fila[SRC_COL_ESTADO]        || '').trim();
+    const identificador = String(fila[SRC_COL_IDENTIFICADOR] || '').trim();
+
+    if (!consulado.includes(CONSULADO_OBJETIVO)) continue;
+    if (estado !== ESTADO_A_VERIFICAR) continue;
+    if (!noExpediente || !_vc_esFormatoValido(noExpediente)) { omitidos++; continue; }
+    if (!identificador) { omitidos++; continue; }
+
+    const nombreCompleto = `${nombre} ${apellidos}`.trim();
+    consultados++;
+    const apiResult = _vc_consultarAPI(apellidos, noExpediente);
+
+    const ahora = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss');
+    let rowData;
+
+    if (apiResult.ok) {
+      const d = apiResult.datos;
+      const fRes = _vc_extraerFecha(d.fechaResolucion);
+      const fIns = _vc_extraerFecha(d.fechaInscripcion);
+      const reg  = _vc_formatarRegistrales(d);
+
+      rowData = [nombre, apellidos, noExpediente, identificador, d.estado || '', d.nombre || '', d.nombreProgenitor || '', d.updated || '', fRes, fIns, reg, 'OK', ahora];
+      actualizados++;
+      const nota = apiResult.varianteUsada !== apellidos ? ` (Coincidencia con: "${apiResult.varianteUsada}")` : '';
+      _vc_logExpediente(ss, identificador, nombreCompleto, noExpediente, 'Consulta Consular', `Estado: ${d.estado || 'OK'}${nota}`);
+    } else if (apiResult.noEncontrado) {
+      rowData = [nombre, apellidos, noExpediente, identificador, '', '', '', '', '', '', '', 'NO ENCONTRADO', ahora];
+      noEncontrados++;
+      _vc_logExpediente(ss, identificador, nombreCompleto, noExpediente, 'No Encontrado', 'Verificadas 4 variantes de apellidos');
+    } else {
+      rowData = [nombre, apellidos, noExpediente, identificador, '', '', '', '', '', '', '', 'ERROR SERVIDOR', ahora];
+      errores++;
+      _vc_logExpediente(ss, identificador, nombreCompleto, noExpediente, 'Error Conexión', apiResult.detalle || 'Error API');
+    }
+
+    const filaDestino = idToRow[identificador];
+    if (filaDestino) {
+      resultSheet.getRange(filaDestino, 1, 1, rowData.length).setValues([rowData]);
+    } else {
+      const nuevaFila = resultSheet.getLastRow() + 1;
+      resultSheet.getRange(nuevaFila, 1, 1, rowData.length).setValues([rowData]);
+      idToRow[identificador] = nuevaFila;
+    }
+
+    Utilities.sleep(3500);
+  }
+
+  if (!pausado) {
+    ['LAST_ROW_VERIFICACION', 'ACUM_VC_CONSULTADOS', 'ACUM_VC_ACTUALIZADOS', 'ACUM_VC_NO_ENCONTRADOS', 'ACUM_VC_ERRORES', 'ACUM_VC_OMITIDOS'].forEach(k => props.deleteProperty(k));
+    const oldId = props.getProperty('TEMP_TRIGGER_VERIFICACION');
+    if (oldId) {
+      ScriptApp.getProjectTriggers().forEach(t => { if (t.getUniqueId() === oldId) ScriptApp.deleteTrigger(t); });
+      props.deleteProperty('TEMP_TRIGGER_VERIFICACION');
+    }
+  }
+
+  return { ok: true, consultados, actualizados, noEncontrados, errores, omitidos };
+}
+
+
+// ==========================================
+// FUNCIONES DE APOYO Y PARSEADORES DE DATOS
+// ==========================================
+
+/**
+ * Extrae limpiamente la fecha en formato YYYY-MM-DD.
+ * Procesa tanto objetos JSON { date: "2024-05-12 00:00:00.000000" }
+ * como strings de fecha con hora.
+ */
+function _vc_extraerFecha(val) {
+  if (!val) return '';
+  if (typeof val === 'object' && val.date) {
+    return String(val.date).split(' ')[0].trim();
+  }
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (!s || s === 'null' || s === 'undefined') return '';
+    return s.split(' ')[0].split('T')[0].trim();
+  }
+  return '';
+}
+
+/**
+ * Formatea los datos registrales.
+ * Si posee tomo/folio/número tradicional -> Devuelve "Tomo: X | Folio: Y | Núm: Z"
+ * Si es resuelto/inscrito pero no posee tomo/folio en papel -> Devuelve "RESUELTO CON LNE DICIREG"
+ */
+function _vc_formatarRegistrales(datos) {
+  if (!datos) return '';
+  const partes = [];
+  if (datos.tomo)   partes.push(`Tomo: ${datos.tomo}`);
+  if (datos.folio)  partes.push(`Folio: ${datos.folio}`);
+  if (datos.numero) partes.push(`Núm: ${datos.numero}`);
+
+  if (partes.length > 0) {
+    return partes.join(' | ');
+  }
+
+  // Detección de Registro Civil Digital (DICIREG / LNE)
+  const estadoStr = String(datos.estado || datos.resultadoExpediente || '').toLowerCase();
+  const fechaInsc = _vc_extraerFecha(datos.fechaInscripcion);
+
+  if ((estadoStr.includes('resuelto') || fechaInsc) && fechaInsc) {
+    return 'RESUELTO CON LNE DICIREG';
+  }
+
+  return '';
+}
+
+function _vc_logExpediente(ss, identificador, nombreCompleto, noExpediente, accion, detalle) {
+  try {
+    const logSheet = ss.getSheetByName(SHEET_LOGS);
+    if (logSheet) {
+      const fechaHora = Utilities.formatDate(
+        new Date(),
+        Session.getScriptTimeZone(),
+        'dd/MM/yyyy HH:mm:ss'
+      );
+      logSheet.appendRow([
+        fechaHora,
+        identificador,
+        nombreCompleto,
+        noExpediente,
+        accion,
+        detalle
+      ]);
+    }
+  } catch (e) {
+    console.log(`[LOG FAIL] ${identificador} - ${accion}: ${detalle}`);
+  }
+}
+
+function _vc_obtenerOCrearHojaResultados(ss) {
+  let sheet = ss.getSheetByName(SHEET_VERIFICACION);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_VERIFICACION);
+
+    const headerRange = sheet.getRange(1, 1, 1, HEADERS_VERIFICACION.length);
+    headerRange.setValues([HEADERS_VERIFICACION]);
+    headerRange.setBackground('#000000');
+    headerRange.setFontColor('#D4AF37');
+    headerRange.setFontWeight('bold');
+    headerRange.setFontSize(11);
+    headerRange.setHorizontalAlignment('center');
+
+    sheet.setFrozenRows(1);
+
+    const anchos = [140, 160, 130, 110, 155, 180, 180, 115, 120, 120, 200, 115, 155];
+    anchos.forEach((w, idx) => sheet.setColumnWidth(idx + 1, w));
+
+    console.log(`✅ Hoja "${SHEET_VERIFICACION}" creada con cabeceras y diseño de marca.`);
+  }
+  return sheet;
+}
+
+function _vc_construirMapaIdentificadores(sheet) {
+  const mapa = {};
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return mapa;
+
+  const idCol = sheet
+    .getRange(2, VCOL_IDENTIFICADOR + 1, lastRow - 1, 1)
+    .getValues();
+
+  idCol.forEach((row, idx) => {
+    const id = String(row[0] || '').trim();
+    if (id) mapa[id] = idx + 2;
+  });
+
+  return mapa;
+}
+
+function _vc_esFormatoValido(num) {
+  return /^\d{6}-\d{3,}$/.test(num);
+}
+
+function _vc_consultarAPI(apellidosOriginal, noExpediente) {
+  const partes = String(apellidosOriginal || '').trim().split(/\s+/).filter(Boolean);
+
+  const variantes = [];
+  const agregarVariante = (str) => {
+    const s = str.trim();
+    if (s && !variantes.includes(s)) variantes.push(s);
+  };
+
+  agregarVariante(apellidosOriginal);
+  if (partes.length > 1) agregarVariante(partes[0]);
+  if (partes.length > 1) agregarVariante(partes[partes.length - 1]);
+  if (partes.length === 2) agregarVariante(`${partes[1]} ${partes[0]}`);
+
+  let ultimoDetalle = '';
+
+  for (let k = 0; k < variantes.length; k++) {
+    const varianteActual = variantes[k];
+
+    try {
+      const loginPayload = JSON.stringify({
+        apellidos:    varianteActual,
+        noExpediente: noExpediente + SUFIJO_LMD_LOGIN
+      });
+
+      const loginOpts = {
+        method:             'post',
+        contentType:        'application/json',
+        payload:            loginPayload,
+        muteHttpExceptions: true,
+        followRedirects:    true
+      };
+
+      const loginResp   = UrlFetchApp.fetch(API_LOGIN_URL, loginOpts);
+      const loginStatus = loginResp.getResponseCode();
+
+      if (loginStatus === 404) {
+        ultimoDetalle = '404 No Encontrado';
+        Utilities.sleep(400);
+        continue;
+      }
+
+      if (loginStatus !== 200) {
+        return { ok: false, noEncontrado: false, detalle: `Login HTTP ${loginStatus}` };
+      }
+
+      const loginData = JSON.parse(loginResp.getContentText());
+      const token     = loginData.consultaToken || '';
+
+      const allHeaders = loginResp.getAllHeaders();
+      let cookieStr = '';
+      const rawCookies = allHeaders['Set-Cookie'] || allHeaders['set-cookie'];
+      if (rawCookies) {
+        const lista = Array.isArray(rawCookies) ? rawCookies : [rawCookies];
+        cookieStr = lista.map(c => c.split(';')[0]).join('; ');
+      }
+
+      const noExpedienteLMD = noExpediente + SUFIJO_LMD_GET;
+      const getUrl = API_EXPEDIENTES_BASE_URL + encodeURIComponent(noExpedienteLMD);
+
+      const getHeaders = { 'Authorization': 'Bearer ' + token };
+      if (cookieStr) getHeaders['Cookie'] = cookieStr;
+
+      const getOpts = {
+        method:             'get',
+        muteHttpExceptions: true,
+        headers:            getHeaders
+      };
+
+      const statusResp = UrlFetchApp.fetch(getUrl, getOpts);
+      const statusCode = statusResp.getResponseCode();
+
+      if (statusCode !== 200) {
+        return { ok: false, noEncontrado: false, detalle: `Estado HTTP ${statusCode}` };
+      }
+
+      const datos = JSON.parse(statusResp.getContentText());
+      return { ok: true, datos, varianteUsada: varianteActual };
+
+    } catch (e) {
+      console.log(`⚠️ Excepción en intento con variante "${varianteActual}": ${e.message}`);
+      ultimoDetalle = e.message;
+    }
+  }
+
+  return { ok: false, noEncontrado: true, detalle: ultimoDetalle };
+}
