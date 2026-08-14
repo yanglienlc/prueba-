@@ -84,6 +84,10 @@ function trabajadorNocturno() {
             sheet.getRange(i + 1, 6).setValue("PENDIENTE RESOLUCION"); // F: Actualiza Estado
             sheet.getRange(i + 1, 7).setValue(`CITA ${fechaStr}`);       // G: Formatea Detalle
             
+            // Inyectamos la leyenda visual automáticamente para el usuario (Poka-Yoke)
+            const advertencia = "\n\n⚠️ Puedes escribir otro texto, pero la automatización de este expediente no funcionará correctamente.";
+            sheet.getRange(i + 1, 7).setNote('💡 Sugerencia: CITA DD/MM/AAAA' + advertencia);
+            
             // Limpiamos notificaciones para que el Motor de Envíos tome el relevo
             sheet.getRange(i + 1, 11).clearContent(); // K
             sheet.getRange(i + 1, 12).clearContent(); // L
