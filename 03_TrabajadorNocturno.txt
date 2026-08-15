@@ -6,7 +6,8 @@ function trabajadorNocturno() {
   const startTime = Date.now();
   const MAX_EXECUTION_TIME = 270000; // 4.5 minutos de límite seguro
 
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) return null;
 
   const data = sheet.getDataRange().getValues();
@@ -25,6 +26,9 @@ function trabajadorNocturno() {
   const cicloTramites = getConfig("DIAS_CICLO_TRAMITES");
   const cicloSeguimiento = getConfig("DIAS_CICLO_SEGUIMIENTO");
   const carenciaResolucion = getConfig("DIAS_CARENCIA_RESOLUCION");
+
+  // Pre-carga del Mapa de Verificación Consular para consulta ultra-rápida (Triple Verificación)
+  const mapaVerificacion = _tn_construirMapaVerificacion(ss);
 
   if (startRow === 1) {
     console.log(`🕒 Iniciando Auditor Nocturno. Filas a evaluar: ${data.length - 1}. Modo Prueba: ${modoPrueba ? "ACTIVO" : "INACTIVO"}`);
@@ -58,17 +62,18 @@ function trabajadorNocturno() {
     }
     // ------------------------------------
 
-    const id = String(data[i][8]).trim();
-    const estado = String(data[i][5]).trim().toUpperCase();
-    const detalle = String(data[i][6]).trim();
-    const notificado = String(data[i][10]).trim().toUpperCase(); 
+    const id          = String(data[i][8]).trim();
+    const consulado   = String(data[i][2]).trim().toUpperCase();
+    const estado      = String(data[i][5]).trim().toUpperCase();
+    const detalle     = String(data[i][6]).trim();
+    const notificado  = String(data[i][10]).trim().toUpperCase(); 
     const fechaUltimaRaw = data[i][11]; 
-    const baja = String(data[i][12]).trim().toUpperCase(); 
+    const baja        = String(data[i][12]).trim().toUpperCase(); 
 
     if (baja === "SI") continue; // Si está de baja, el robot ni lo mira
 
     // ==============================================================
-    // 🤖 NUEVO: MOTOR DE AUTOMATIZACIÓN DE ESTADOS (CITA ALCANZADA)
+    // 🤖 MOTOR DE AUTOMATIZACIÓN DE ESTADOS (CITA ALCANZADA)
     // ==============================================================
     if (estado === "PENDIENTE DE CITA" && detalle.toUpperCase().startsWith("CITA PROGRAMADA")) {
       let fechaCita = extraerFechaDeDetalle(detalle);
@@ -123,6 +128,19 @@ function trabajadorNocturno() {
       }
       if (carenciaSuperada && diasTranscurridos >= cicloSeguimiento) necesitaEnvio = true;
     }
+    // ==============================================================
+    // 🛡️ SALVEDAD BLINDADA: RESUELTO INTERMEDIO LA HABANA
+    // Solo si: 1) Estado es RESUELTO, 2) Consulado es LA HABANA,
+    // y 3) Existe registro OK con fechaResolucion verificada por API en VERIFICACION_CONSULAR
+    // ==============================================================
+    else if (estado === "RESUELTO" && consulado.includes("HABANA")) {
+      const datosVerificados = mapaVerificacion[id];
+      if (datosVerificados && datosVerificados.ok && datosVerificados.fechaResolucion) {
+        if (diasTranscurridos >= cicloSeguimiento) {
+          necesitaEnvio = true;
+        }
+      }
+    }
 
     if (necesitaEnvio) {
       if (!modoPrueba) {
@@ -153,4 +171,37 @@ function trabajadorNocturno() {
     procesados: actualizaciones,
     pausado: pausado
   };
+}
+
+/**
+ * Pre-construye un mapa rápido en memoria de la hoja VERIFICACION_CONSULAR.
+ * Permite al Trabajador Nocturno realizar la Triple Verificación en O(1)ms.
+ */
+function _tn_construirMapaVerificacion(ss) {
+  const mapa = {};
+  const sheetVerif = ss.getSheetByName("VERIFICACION_CONSULAR");
+  if (!sheetVerif) return mapa;
+
+  const lastRow = sheetVerif.getLastRow();
+  if (lastRow < 2) return mapa;
+
+  const data = sheetVerif.getRange(2, 1, lastRow - 1, 13).getValues();
+  data.forEach(row => {
+    const id          = String(row[3] || '').trim(); // Col D: Identificador
+    const fResolucion = String(row[8] || '').trim(); // Col I: Fecha Resolución
+    const fInscripcion= String(row[9] || '').trim(); // Col J: Fecha Inscripción
+    const datosReg    = String(row[10] || '').trim();// Col K: Datos Registrales
+    const resultado   = String(row[11] || '').trim();// Col L: Resultado (OK)
+
+    if (id) {
+      mapa[id] = {
+        ok: (resultado === "OK"),
+        fechaResolucion: fResolucion,
+        fechaInscripcion: fInscripcion,
+        datosRegistrales: datosReg
+      };
+    }
+  });
+
+  return mapa;
 }
