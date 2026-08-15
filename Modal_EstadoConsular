@@ -166,12 +166,12 @@
       </div>
 
       <div id="start-content" style="display: none;">
-        <div id="badge-modo-prueba" class="badge-prueba" style="display: none;">⚠️ MODO PRUEBA ACTIVO</div>
+        <div id="badge-modo-prueba" class="badge-prueba" style="display: none;">⚠️ MODO PRUEBA ACTIVO (EXPEDIENTES LMD no será modificada)</div>
 
         <div style="background: #fdfdfd; border: 1px solid #e5e5e5; border-radius: 6px; padding: 20px; margin: 15px 0; text-align: center;">
           <div style="font-size: 32px; font-weight: bold; color: #000;" id="txt-total-exp">0</div>
           <div style="font-size: 13px; color: #666; margin-top: 4px;">Expedientes listos para verificar</div>
-          <div style="font-size: 11px; color: #888; margin-top: 2px;">(Consulado: La Habana | Estado: PENDIENTE RESOLUCIÓN)</div>
+          <div style="font-size: 11px; color: #888; margin-top: 2px;">(Consulado: La Habana | Estados: PENDIENTE RESOLUCIÓN / RESUELTO)</div>
         </div>
 
         <button class="btn" id="btn-iniciar" onclick="iniciarVerificacion()">▶ Iniciar Verificación en Vivo</button>
