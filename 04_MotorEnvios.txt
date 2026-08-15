@@ -1,12 +1,13 @@
 // ==========================================
-// MÓDULO 04: MOTOR DE ENVÍOS (CON PAGINACIÓN Y LOGS)
+// MÓDULO 04: MOTOR DE ENVÍOS (CON PAGINACIÓN, LOGS Y SANDBOX AUTÓNOMO)
 // ==========================================
 
 function procesarNotificacionesLMD() {
   const startTime = Date.now();
   const MAX_EXECUTION_TIME = 270000; // 4.5 minutos
 
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) return null;
 
   const dataRange = sheet.getDataRange();
@@ -33,6 +34,12 @@ function procesarNotificacionesLMD() {
 
   const modoPrueba = getConfig("MODO_PRUEBA");
   const emailPrueba = getConfig("EMAIL_PRUEBA");
+
+  // Configuración de tiempos para evaluación autónoma en modo simulacro
+  const cicloTramites = getConfig("DIAS_CICLO_TRAMITES");
+  const cicloSeguimiento = getConfig("DIAS_CICLO_SEGUIMIENTO");
+  const carenciaResolucion = getConfig("DIAS_CARENCIA_RESOLUCION");
+  const mapaVerificacion = _me_construirMapaVerificacion(ss);
 
   if (startRow === 1) {
     console.log(`🚀 Iniciando Motor de Envíos. Filas a evaluar: ${data.length - 1}. Modo Prueba: ${modoPrueba ? "ACTIVO" : "INACTIVO"}`);
@@ -78,6 +85,7 @@ function procesarNotificacionesLMD() {
     const id = String(data[i][8]).trim();
     const emailCliente = extraerEmailReal(data[i][9], richData[i][9]); 
     const notificado = String(data[i][10]).trim().toUpperCase();
+    const fechaUltimaRaw = data[i][11]; 
     const baja = String(data[i][12]).trim().toUpperCase();
     const nombreCompleto = nombre + " " + apellido;
 
@@ -99,16 +107,55 @@ function procesarNotificacionesLMD() {
     }
 
     let enviarHoy = false;
-    if (esEstadoFinal && notificado !== "SI") enviarHoy = true;
-    else if (!esEstadoFinal && notificado === "NO") enviarHoy = true;
+
+    if (!modoPrueba) {
+      // --- LÓGICA DE PRODUCCIÓN (BASADA EN CELDAS) ---
+      if (esEstadoFinal && notificado !== "SI") enviarHoy = true;
+      else if (!esEstadoFinal && notificado === "NO") enviarHoy = true;
+    } else {
+      // --- LÓGICA DE MODO PRUEBA / SANDBOX AUTÓNOMO ---
+      // Si la celda ya tiene NO o no está notificado en estado final
+      if (esEstadoFinal && notificado !== "SI") {
+        enviarHoy = true;
+      } else if (!esEstadoFinal && notificado === "NO") {
+        enviarHoy = true;
+      } else {
+        // Evaluación cronológica autónoma en memoria (sin requerir que se haya editado la hoja)
+        let fechaUltima = (fechaUltimaRaw && fechaUltimaRaw instanceof Date) ? fechaUltimaRaw : null;
+        let diasTranscurridos = fechaUltima ? Math.floor((hoy - fechaUltima) / (1000 * 60 * 60 * 24)) : 9999;
+
+        if (estado === "PENDIENTE DE CITA" || estado === "PENDIENTE DE CREDENCIALES") {
+          if (diasTranscurridos >= cicloTramites) enviarHoy = true;
+        } 
+        else if (estado === "RECURSO PRESENTADO") {
+          if (diasTranscurridos >= cicloSeguimiento) enviarHoy = true;
+        }
+        else if (estado === "PENDIENTE RESOLUCION") {
+          let fechaCita = extraerFechaDeDetalle(detalle);
+          let carenciaSuperada = true; 
+          if (fechaCita) {
+            let diasDesdeCita = Math.floor((hoy - fechaCita) / (1000 * 60 * 60 * 24));
+            if (diasDesdeCita < carenciaResolucion) carenciaSuperada = false;
+          }
+          if (carenciaSuperada && diasTranscurridos >= cicloSeguimiento) enviarHoy = true;
+        }
+        else if (estado === "RESUELTO" && consulado.toUpperCase().includes("HABANA")) {
+          const datosVerif = mapaVerificacion[id];
+          if (datosVerif && datosVerif.ok && datosVerif.fechaResolucion) {
+            if (diasTranscurridos >= cicloSeguimiento) enviarHoy = true;
+          }
+        }
+      }
+    }
 
     if (enviarHoy) {
       const estadoParaPlantilla = (esCorreoPersonal && !esEstadoFinal) ? "CORREO_PERSONAL_PENDIENTE" : estado;
       
-      // Empaquetamos el contexto para la plantilla
+      // Empaquetamos el contexto para la plantilla (incluye identificador para verificación)
       const contexto = {
         consulado: consulado,
         detalle: detalle,
+        identificador: id,
         termometroHabana: termometroHabana,
         termometroMiami: termometroMiami
       };
@@ -201,4 +248,36 @@ function procesarNotificacionesLMD() {
     emailDestino: emailPrueba,
     pausado: pausado
   };
+}
+
+/**
+ * Pre-construye el mapa de verificación consular para uso interno del motor de envíos.
+ */
+function _me_construirMapaVerificacion(ss) {
+  const mapa = {};
+  const sheetVerif = ss.getSheetByName("VERIFICACION_CONSULAR");
+  if (!sheetVerif) return mapa;
+
+  const lastRow = sheetVerif.getLastRow();
+  if (lastRow < 2) return mapa;
+
+  const data = sheetVerif.getRange(2, 1, lastRow - 1, 13).getValues();
+  data.forEach(row => {
+    const id          = String(row[3] || '').trim();
+    const fResolucion = String(row[8] || '').trim();
+    const fInscripcion= String(row[9] || '').trim();
+    const datosReg    = String(row[10] || '').trim();
+    const resultado   = String(row[11] || '').trim();
+
+    if (id) {
+      mapa[id] = {
+        ok: (resultado === "OK"),
+        fechaResolucion: fResolucion,
+        fechaInscripcion: fInscripcion,
+        datosRegistrales: datosReg
+      };
+    }
+  });
+
+  return mapa;
 }
