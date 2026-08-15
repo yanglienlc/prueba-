@@ -78,8 +78,8 @@ function obtenerPlantillaHTML(nombre, estado, enlaceBaja, contexto = {}) {
       break;
     case "RESUELTO":
       mostrarBaja = false;
-      asunto = "Aviso importante: Tu expediente LMD figura como resuelto";
-      cuerpoMensaje = `<p>Hola <strong>${nombre}</strong>, ¿cómo va todo?</p><p>Nos ponemos en contacto contigo porque, tras nuestras revisiones habituales, tenemos constancia de que tu expediente de nacionalidad ha pasado a estado "Resuelto" o "Concluido" por parte de las autoridades competentes.</p><p>No obstante, al día de hoy nuestro despacho no ha recibido la notificación oficial que nos confirme el sentido de dicha resolución (favorable o denegada). En muchas ocasiones, la administración envía esta comunicación directamente al domicilio o al correo personal del solicitante.</p><p>Por ello, te pedimos que estés muy atento a tus comunicaciones y, si ya has recibido la resolución oficial o tu certificación literal, nos la hagas llegar a <strong>${RESPONDER_A}</strong> para poder actualizar tu expediente y guiarte en los pasos definitivos.</p>`;
+      asunto = "Aviso importante: Tu expediente LMD figura como aprobado";
+      cuerpoMensaje = `<p>Hola <strong>${nombre}</strong>, ¿cómo va todo?</p><p>Nos ponemos en contacto contigo porque, tras nuestras revisiones habituales, tenemos constancia de que tu expediente de nacionalidad ha pasado a estado "Aprobado" o "Concluido" por parte de las autoridades competentes.</p><p>No obstante, al día de hoy nuestro despacho no ha recibido la notificación oficial que nos confirme el sentido de dicha resolución (favorable o denegada). En muchas ocasiones, la administración envía esta comunicación directamente al domicilio o al correo personal del solicitante.</p><p>Por ello, te pedimos que estés muy atento a tus comunicaciones y, si ya has recibido la resolución oficial o tu certificación literal, nos la hagas llegar a <strong>${RESPONDER_A}</strong> para poder actualizar tu expediente y guiarte en los pasos definitivos.</p><p>Por nuestra parte, continuaremos atentos.</p>`;
       break;
     case "NO PRESENTADO":
       mostrarBaja = false;
@@ -88,6 +88,12 @@ function obtenerPlantillaHTML(nombre, estado, enlaceBaja, contexto = {}) {
       break;
     default:
       return null;
+  }
+
+  // --- INYECCIÓN DEL RECUADRO DORADO DE VERIFICACIÓN CONSULAR (ESCUDO DOBLE: LA HABANA + DATOS VERIFICADOS) ---
+  const bloqueVerif = obtenerBloqueVerificacionConsularHTML(contexto, oro);
+  if (bloqueVerif) {
+    cuerpoMensaje += bloqueVerif;
   }
 
   const htmlTemplate = `
@@ -137,6 +143,68 @@ function obtenerBloqueValorHTML(ciudad, fecha, colorOro) {
     <p style="margin-bottom: 0; font-size: 14px; color: #444;">Basado exclusivamente en las estadísticas internas de los casos gestionados por Estela Marina, actualmente el Consulado de <strong>${ciudad}</strong> está procesando y entregando las credenciales de aquellos clientes que aplicaron aproximadamente el <strong>${fecha}</strong>.</p>
     <p style="margin-bottom: 0; font-size: 12px; color: #888; margin-top: 12px; line-height: 1.4;"><em>(Nota: Tenga en cuenta que este es un dato de referencia propio de nuestro despacho para ayudarle a estimar los tiempos, y no representa un comunicado oficial del Consulado).</em></p>
   </div>`;
+}
+
+/**
+ * Genera dinámicamente la Ficha Dorada de Verificación Consular para notificaciones.
+ * Escudo Doble: Solo se genera si consulado == "LA HABANA" Y existen datos confirmados en VERIFICACION_CONSULAR.
+ */
+function obtenerBloqueVerificacionConsularHTML(contexto, colorOro) {
+  if (!contexto || !contexto.consulado || !contexto.identificador) return "";
+  const consuladoUpper = String(contexto.consulado).toUpperCase();
+  if (!consuladoUpper.includes("HABANA")) return "";
+
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheetVerif = ss.getSheetByName("VERIFICACION_CONSULAR");
+    if (!sheetVerif) return "";
+
+    const lastRow = sheetVerif.getLastRow();
+    if (lastRow < 2) return "";
+
+    const data = sheetVerif.getRange(2, 1, lastRow - 1, 13).getValues();
+    let registro = null;
+    for (let r = 0; r < data.length; r++) {
+      if (String(data[r][3] || "").trim() === String(contexto.identificador).trim()) {
+        registro = data[r];
+        break;
+      }
+    }
+
+    if (!registro || String(registro[11] || "").trim() !== "OK") return "";
+
+    const estadoConsulado = String(registro[4] || "Aprobado / Resuelto").trim();
+    const fResolucion     = String(registro[8] || "").trim();
+    const fInscripcion    = String(registro[9] || "").trim();
+    const datosReg        = String(registro[10] || "").trim();
+
+    let html = `
+    <div style="background-color: #fcfcfc; border-left: 4px solid ${colorOro}; padding: 15px; margin-top: 25px; border-radius: 0 4px 4px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-family: Arial, sans-serif;">
+      <p style="margin-top: 0; font-size: 14px; color: #333; font-weight: bold;">🔍 Datos Verificados en Portal Consular (La Habana):</p>
+      <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px; color: #444; line-height: 1.6;">
+        <li><strong>Estado en Portal:</strong> ${estadoConsulado}</li>`;
+
+    if (fResolucion) {
+      html += `<li><strong>Fecha de Resolución:</strong> ${fResolucion}</li>`;
+    }
+    if (fInscripcion) {
+      html += `<li><strong>Fecha de Inscripción:</strong> ${fInscripcion}</li>`;
+    }
+    if (datosReg) {
+      html += `<li><strong>Datos Registrales:</strong> ${datosReg}</li>`;
+    } else if (!fInscripcion) {
+      html += `<li><strong>Inscripción:</strong> Pendiente de emisión de Literal de Nacimiento</li>`;
+    }
+
+    html += `
+      </ul>
+      <p style="margin-bottom: 0; font-size: 11px; color: #888; margin-top: 10px;"><em>(Información verificada automáticamente en el sistema del Consulado General de España en La Habana).</em></p>
+    </div>`;
+
+    return html;
+  } catch (e) {
+    return "";
+  }
 }
 
 function renderHtmlResponse(titulo, mensaje, exito) {
