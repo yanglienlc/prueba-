@@ -26,3 +26,49 @@ function inyectarFechasIniciales() {
     // Si se ejecuta desde el editor, el UI no está disponible, pero la consola sí.
   }
 }
+
+// =====================================================================
+// SCRIPT DE UN SOLO USO: INYECCIÓN RETROACTIVA DE LEYENDAS (POKA-YOKE)
+// =====================================================================
+
+function aplicarLeyendasRetroactivas() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    console.error("No se encontró la pestaña con el nombre especificado.");
+    return;
+  }
+
+  const numRows = sheet.getLastRow();
+  if (numRows < 2) return;
+
+  // Extraemos todos los estados (Columna F) de golpe
+  const estados = sheet.getRange(2, 6, numRows - 1, 1).getValues();
+  
+  const advertencia = "\n\n⚠️ Puedes escribir otro texto, pero la automatización de este expediente no funcionará correctamente.";
+  const notasArray = []; // Aquí guardaremos las notas como una lista de estampa
+
+  for (let i = 0; i < estados.length; i++) {
+    const estado = String(estados[i][0]).trim().toUpperCase();
+    let nota = "";
+
+    // Mapeo exhaustivo de todos los estados involucrados en el sistema
+    if (estado === "PENDIENTE DE CREDENCIALES") {
+      nota = '💡 Sugerencia: SOLICITADAS DD/MM/AAAA' + advertencia;
+    } else if (estado === "PENDIENTE DE CITA") {
+      nota = '💡 Sugerencia: CITA PROGRAMADA DD/MM/AAAA' + advertencia;
+    } else if (estado === "PENDIENTE RESOLUCION") {
+      nota = '💡 Sugerencia: CITA DD/MM/AAAA' + advertencia;
+    } else if (estado === "RECURSO PRESENTADO") {
+      nota = '💡 Sugerencia: RECURSO PRESENTADO DD/MM/AAAA' + advertencia;
+    }
+    
+    // Si el estado es cualquier otro (Resuelto, Denegado, No Presentado, etc.) 
+    // la variable 'nota' se queda vacía (""), lo que borrará cualquier nota vieja.
+    notasArray.push([nota]);
+  }
+
+  // Estampamos todas las notas de golpe en la columna G (Detalle)
+  sheet.getRange(2, 7, numRows - 1, 1).setNotes(notasArray);
+  
+  console.log(`✅ ¡Éxito! Leyendas aplicadas a ${numRows - 1} expedientes históricos.`);
+}
