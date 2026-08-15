@@ -1,10 +1,29 @@
 // ==========================================
-// MÓDULO 05: FUNCIONES DE APOYO Y WEB APP
+// MÓDULO 05: FUNCIONES DE APOYO Y WEB APP (ROUTER SEGURO)
 // ==========================================
 
 function doGet(e) {
-  const id = e.parameter ? e.parameter.id : null;
-  const tokenUrl = e.parameter ? e.parameter.token : null;
+  const params = (e && e.parameter) ? e.parameter : {};
+  const accion = params.accion || '';
+  const key = params.key || '';
+
+  // --- API ROUTER: ENDPOINT SEGURO PARA EL ROBOT DEL RCC ---
+  if (accion === 'obtener_rcc') {
+    if (key !== PALABRA_SECRETA) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Acceso no autorizado' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    const datosRCC = (typeof obtenerExpedientesPendientesRCC === 'function') 
+      ? obtenerExpedientesPendientesRCC() 
+      : { ok: false, error: 'Módulo RCC no cargado' };
+    
+    return ContentService.createTextOutput(JSON.stringify(datosRCC))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // --- GESTIÓN DE BAJAS DE SUSCRIPCIÓN DE CLIENTES ---
+  const id = params.id;
+  const tokenUrl = params.token;
   
   if (!id || !tokenUrl) return renderHtmlResponse("Enlace inválido", "El enlace al que intentas acceder está incompleto o mal formado.", false);
 
@@ -43,6 +62,42 @@ function doGet(e) {
   } else {
     registrarLog(id, "Intento de Baja", "Desconocido", "Alerta de Seguridad", "Token o ID no coincidente");
     return renderHtmlResponse("Error de seguridad", "El enlace no es válido o ha expirado.", false);
+  }
+}
+
+function doPost(e) {
+  try {
+    const params = (e && e.parameter) ? e.parameter : {};
+    const key = params.key || '';
+    
+    if (key !== PALABRA_SECRETA) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Acceso no autorizado' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const accion = params.accion || '';
+
+    if (accion === 'guardar_rcc') {
+      const postData = e.postData ? JSON.parse(e.postData.contents) : null;
+      if (!postData || !postData.candidato || !postData.resultado) {
+        return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Datos incompletos' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      if (typeof registrarResultadoRCC === 'function') {
+        registrarResultadoRCC(postData.candidato, postData.resultado);
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({ ok: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Acción no reconocida' }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
